@@ -30,6 +30,8 @@ import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.MirroredTypeException;
+import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
 
@@ -41,7 +43,7 @@ import javax.tools.Diagnostic;
  */
 public class FieldBindings {
 
-    private static final int DEFAULT_MAX_EAGER_FOREIGN_COLLECTION_LEVEL = ForeignCollectionField.MAX_EAGER_LEVEL;
+    private static final int DEFAULT_MAX_EAGER_FOREIGN_COLLECTION_LEVEL = ForeignCollectionField.DEFAULT_MAX_EAGER_LEVEL;
     public static final DataType DEFAULT_DATA_TYPE = DataType.UNKNOWN;
     public static final boolean DEFAULT_CAN_BE_NULL = true;
     public static final boolean DEFAULT_FOREIGN_COLLECTION_ORDER_ASCENDING = true;
@@ -67,7 +69,7 @@ public class FieldBindings {
     private boolean uniqueIndex;
     private String uniqueIndexName;
     private boolean foreignAutoRefresh;
-    private int maxForeignAutoRefreshLevel = DatabaseField.NO_MAX_FOREIGN_AUTO_REFRESH_LEVEL_SPECIFIED;
+    private int maxForeignAutoRefreshLevel = -1;
     private TypeElement persisterClass = null;
     private boolean allowGeneratedIdInsert;
     private String columnDefinition;
@@ -267,13 +269,57 @@ public class FieldBindings {
     }
 
     public static FieldBindings fromDatabaseField(DatabaseType databaseType, Element field, DatabaseField databaseField, Types typeUtils, Messager messager) {
+
+        VariableElement variableElement = (VariableElement) field;
+
         FieldBindings bindings = new FieldBindings();
         bindings.fieldName = field.getSimpleName().toString();
         if (databaseType.isEntityNamesMustBeUpCase()) {
             bindings.fieldName = bindings.fieldName.toUpperCase();
         }
         bindings.columnName = valueIfNotBlank(databaseField.columnName());
+        if(bindings.columnName == null)
+            bindings.columnName = variableElement.getSimpleName().toString();
+
         bindings.dataType = databaseField.dataType();
+        if(bindings.dataType == DataType.UNKNOWN)
+        {
+
+            TypeMirror typeMirror = variableElement.asType();
+            TypeKind kind = typeMirror.getKind();
+            if(kind.isPrimitive())
+            {
+                switch (kind)
+                {
+                    case BOOLEAN:
+                        bindings.dataType = DataType.BOOLEAN;
+                        break;
+                    case DOUBLE:
+                        bindings.dataType = DataType.DOUBLE;
+                        break;
+                    case FLOAT:
+                        bindings.dataType = DataType.FLOAT;
+                        break;
+                    case INT:
+                        bindings.dataType = DataType.INTEGER;
+                        break;
+                    case LONG:
+                        bindings.dataType = DataType.LONG;
+                        break;
+                    case SHORT:
+                        bindings.dataType = DataType.SHORT;
+                        break;
+                        default:
+                            throw new UnsupportedOperationException("Don't recognize type: "+ kind);
+                }
+            }
+            else
+            {
+                String theType = ((TypeElement) ((DeclaredType) typeMirror).asElement()).getQualifiedName().toString();
+                if(theType.equals("java.lang.String"))
+                    bindings.dataType = DataType.STRING;
+            }
+        }
         // NOTE: == did not work with the NO_DEFAULT string
         String defaultValue = databaseField.defaultValue();
         if (!defaultValue.equals(DatabaseField.DEFAULT_STRING)) {
@@ -355,7 +401,7 @@ public class FieldBindings {
         bindings.foreignCollectionEager = foreignCollection.eager();
         @SuppressWarnings("deprecation")
         int maxEagerLevel = foreignCollection.maxEagerForeignCollectionLevel();
-        if (maxEagerLevel != ForeignCollectionField.MAX_EAGER_LEVEL) {
+        if (maxEagerLevel != ForeignCollectionField.DEFAULT_MAX_EAGER_LEVEL) {
             bindings.foreignCollectionMaxEagerLevel = maxEagerLevel;
         } else {
             bindings.foreignCollectionMaxEagerLevel = foreignCollection.maxEagerLevel();

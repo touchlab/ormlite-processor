@@ -3,20 +3,21 @@ apply plugin: 'maven'
 apply plugin: 'bintray-release'
 
 group = 'com.koenv'
-version = '0.2'
+version = '0.3.11'
 
 sourceCompatibility = 1.7
 targetCompatibility = 1.7
 
 repositories {
     mavenCentral()
+    mavenLocal()
 }
 
 dependencies {
-    compile 'com.j256.ormlite:ormlite-core:4.48'
-    compile 'com.j256.ormlite:ormlite-android:4.48'
+    compile 'com.j256.ormlite:ormliteer-android:4.49-SNAPSHOT'
     compile 'com.squareup:javapoet:1.0.0'
     compile 'com.google.guava:guava:18.0'
+    compile 'org.apache.commons:commons-lang3:3.4'
 
     testCompile 'junit:junit:4.12'
     testCompile 'com.google.truth:truth:0.26'

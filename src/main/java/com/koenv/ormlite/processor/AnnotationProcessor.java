@@ -24,32 +24,40 @@
 package com.koenv.ormlite.processor;
 
 import com.google.common.base.Joiner;
+import com.j256.ormlite.android.AndroidDatabaseResults;
 import com.j256.ormlite.dao.DaoManager;
 import com.j256.ormlite.db.DatabaseType;
 import com.j256.ormlite.db.SqliteAndroidDatabaseType;
+import com.j256.ormlite.field.DataType;
 import com.j256.ormlite.field.DatabaseField;
 import com.j256.ormlite.field.DatabaseFieldConfig;
 import com.j256.ormlite.field.ForeignCollectionField;
+import com.j256.ormlite.support.DatabaseResults;
 import com.j256.ormlite.table.DatabaseTable;
 import com.j256.ormlite.table.DatabaseTableConfig;
+import com.j256.ormlite.table.GeneratedTableMapper;
 import com.squareup.javapoet.*;
+import org.apache.commons.lang3.StringUtils;
 
 import javax.annotation.processing.*;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.Modifier;
+import javax.lang.model.element.Name;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.TypeKind;
+import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
 import java.io.IOException;
+import java.sql.SQLException;
 import java.text.SimpleDateFormat;
 import java.util.*;
 
 import static com.j256.ormlite.field.DatabaseFieldConfig.DEFAULT_DATA_TYPE;
 
 public class AnnotationProcessor extends AbstractProcessor {
-    private static final int DEFAULT_MAX_EAGER_FOREIGN_COLLECTION_LEVEL = ForeignCollectionField.MAX_EAGER_LEVEL;
+    private static final int DEFAULT_MAX_EAGER_FOREIGN_COLLECTION_LEVEL = ForeignCollectionField.DEFAULT_MAX_EAGER_LEVEL;
 
     private Types typeUtils;
     private Filer filer;
@@ -57,19 +65,36 @@ public class AnnotationProcessor extends AbstractProcessor {
 
     private static final DatabaseType databaseType = new SqliteAndroidDatabaseType();
 
+    private List<ClassName> baseClasses;
     private List<ClassName> generatedClasses;
+    private Elements elementUtils;
 
     @Override
     public synchronized void init(ProcessingEnvironment processingEnv) {
         super.init(processingEnv);
         typeUtils = processingEnv.getTypeUtils();
+        elementUtils = processingEnv.getElementUtils();
         filer = processingEnv.getFiler();
         messager = processingEnv.getMessager();
     }
 
     @Override
     public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
+        try
+        {
+            return safeProcess(roundEnv);
+        } catch (Exception e)
+        {
+            messager.printMessage(Diagnostic.Kind.ERROR, e.getClass().getName());
+            return true;
+        }
+    }
+
+    private boolean safeProcess(RoundEnvironment roundEnv)
+    {
+        baseClasses = new ArrayList<ClassName>();
         generatedClasses = new ArrayList<ClassName>();
+
 
         for (Element annotatedElement : roundEnv.getElementsAnnotatedWith(DatabaseTable.class)) {
             if (!annotatedElement.getKind().isClass()) {
@@ -83,6 +108,7 @@ public class AnnotationProcessor extends AbstractProcessor {
             TypeElement working = typeElement;
             while (working != null) {
                 for (Element element : working.getEnclosedElements()) {
+
                     if (element.getKind().isField()) {
                         if (element.getAnnotation(DatabaseField.class) != null) {
                             DatabaseField databaseField = element.getAnnotation(DatabaseField.class);
@@ -127,8 +153,10 @@ public class AnnotationProcessor extends AbstractProcessor {
 
         if (!generatedClasses.isEmpty()) {
             JavaFile javaFile = generateMainFile();
+            JavaFile helperJavaFile = generateHelperFile();
             try {
                 javaFile.writeTo(filer);
+                helperJavaFile.writeTo(filer);
             } catch (IOException e) {
                 messager.printMessage(Diagnostic.Kind.ERROR, "Code gen failed: failed to generate main class: " + e);
                 return false;
@@ -160,6 +188,17 @@ public class AnnotationProcessor extends AbstractProcessor {
             methodBuilder.addStatement("configs.add($T.getTableConfig())", tableConfig);
         }
 
+        ParameterizedTypeName generatedMapType = ParameterizedTypeName.get(ClassName.get(HashMap.class),
+                ParameterizedTypeName.get(ClassName.get(Class.class), WildcardTypeName.subtypeOf(Object.class)),
+                ParameterizedTypeName.get(ClassName.get(GeneratedTableMapper.class), WildcardTypeName.subtypeOf(Object.class)));
+        methodBuilder.addStatement("$T generatedMap = new $T()", generatedMapType, generatedMapType);
+        for (int i=0; i<baseClasses.size(); i++)
+        {
+            ClassName baseClass = baseClasses.get(i);
+            ClassName generatedClass = generatedClasses.get(i);
+            methodBuilder.addStatement("generatedMap.put($T.class, new $T())", baseClass, generatedClass);
+        }
+        methodBuilder.addStatement("$T.setGeneratedMap(generatedMap)", DaoManager.class);
         methodBuilder.addStatement("$T.addCachedDatabaseConfigs(configs)", DaoManager.class);
 
         configBuilder.addMethod(methodBuilder.build());
@@ -167,15 +206,80 @@ public class AnnotationProcessor extends AbstractProcessor {
         return JavaFile.builder(className.packageName(), configBuilder.build()).build();
     }
 
+    private JavaFile generateHelperFile() {
+        ClassName className = ClassName.get("com.koenv.ormlite.processor", "OrmLiteHelper");
+
+        TypeSpec.Builder configBuilder = TypeSpec.classBuilder(className.simpleName())
+                .addModifiers(Modifier.PUBLIC, Modifier.FINAL)
+                .addJavadoc("Generated on $L\n", new SimpleDateFormat("yyyy/MM/dd hh:mm:ss").format(new Date()));
+
+//        ParameterizedTypeName databaseTableConfig = ParameterizedTypeName.get(ClassName.get(DatabaseTableConfig.class), WildcardTypeName.subtypeOf(Object.class));
+//
+//        ParameterizedTypeName collectionOfTableConfigs = ParameterizedTypeName.get(ClassName.get(Collection.class), databaseTableConfig);
+//        ParameterizedTypeName listOfTableConfigs = ParameterizedTypeName.get(ClassName.get(ArrayList.class), databaseTableConfig);
+
+        MethodSpec.Builder methodBuilder = MethodSpec.methodBuilder("findDbColumn")
+                .addModifiers(Modifier.PUBLIC, Modifier.STATIC)
+                .addException(SQLException.class)
+                .addParameter(DatabaseResults.class, "results")
+                .addParameter(createColPositionsType(), "columnPositions")
+                .addParameter(String.class, "columnName")
+                .returns(int.class)
+                .addJavadoc("Find db column and fill map\n");
+
+        methodBuilder.addCode("\t\tInteger dbColumnPos = columnPositions.get(columnName);\n" +
+                "\t\tif (dbColumnPos == null) {\n" +
+                "\t\t\tdbColumnPos = results.findColumn(columnName);\n" +
+                "\t\t\tcolumnPositions.put(columnName, dbColumnPos);\n" +
+                "\t\t}\n" +
+                "\t\treturn dbColumnPos;\n");
+
+        /*methodBuilder.addStatement("Integer dbColumnPos = columnPositions.get(columnName)");
+        methodBuilder.addStatement("if (dbColumnPos == null) {");
+        methodBuilder.addStatement("dbColumnPos = results.findColumn(columnName)");
+        methodBuilder.addStatement("columnPositions.put(columnName, dbColumnPos)");
+        methodBuilder.addStatement("}");
+        methodBuilder.addStatement("return dbColumnPos");*/
+
+        configBuilder.addMethod(methodBuilder.build());
+
+        return JavaFile.builder(className.packageName(), configBuilder.build()).build();
+    }
+
+    private ParameterizedTypeName createColPositionsType()
+    {
+        return ParameterizedTypeName.get(Map.class, String.class, Integer.class);
+    }
+
     private JavaFile generateFile(TypeElement element, List<FieldBindings> fieldConfigs, String tableName) {
         ClassName className = ClassName.get(element);
         ClassName configName = ClassName.get(className.packageName(), Joiner.on('$').join(className.simpleNames()) + "$$Configuration");
 
         TypeSpec.Builder configBuilder = TypeSpec.classBuilder(configName.simpleName())
+
                 .addModifiers(Modifier.PUBLIC, Modifier.FINAL)
+
+                .addSuperinterface(ParameterizedTypeName.get(ClassName.get(GeneratedTableMapper.class), className))
                 .addJavadoc("Generated on $L\n", new SimpleDateFormat("yyyy/MM/dd hh:mm:ss").format(new Date()));
 
         TypeName databaseTableConfig = ParameterizedTypeName.get(ClassName.get(DatabaseTableConfig.class), ClassName.get(element));
+
+        MethodSpec.Builder javaFillMethodBuilder = MethodSpec.methodBuilder("fillRow")
+                .addModifiers(Modifier.PUBLIC)
+                .addParameter(DatabaseResults.class, "results")
+                .addParameter(createColPositionsType(), "columnPositions")
+                .addException(SQLException.class)
+                .addAnnotation(Override.class)
+                .returns(className)
+                ;
+
+        javaFillMethodBuilder.addStatement("$T data = new $T()", className, className);
+
+        makeCopyRows(javaFillMethodBuilder, element, tableName, fieldConfigs);
+
+        javaFillMethodBuilder.addStatement("return data");
+        
+        configBuilder.addMethod(javaFillMethodBuilder.build());
 
         MethodSpec.Builder tableConfigMethodBuilder = MethodSpec.methodBuilder("getTableConfig")
                 .addModifiers(Modifier.PUBLIC, Modifier.STATIC)
@@ -211,9 +315,83 @@ public class AnnotationProcessor extends AbstractProcessor {
 
         configBuilder.addMethod(tableConfigMethodBuilder.build());
 
+        baseClasses.add(className);
         generatedClasses.add(configName);
 
         return JavaFile.builder(configName.packageName(), configBuilder.build()).build();
+    }
+
+    private void makeCopyRows(MethodSpec.Builder methodBuilder, TypeElement element, String tableName, List<FieldBindings> fieldConfigs)
+    {
+        CodeBlock.Builder builder = CodeBlock.builder();
+        for (FieldBindings fieldConfig : fieldConfigs)
+        {
+            makeCopyRow(fieldConfig, builder);
+        }
+        methodBuilder.addCode(builder.build());
+    }
+
+
+    private void makeCopyRow(FieldBindings config, CodeBlock.Builder builder)
+    {
+        if(!config.isForeignCollection())
+        {
+            if(config.isForeign())
+            {
+
+            } else
+            {
+                String accessData = null;
+
+                switch (config.getDataType())
+                {
+                    case BOOLEAN:
+                    case BOOLEAN_OBJ:
+                        accessData = "results.getBoolean(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.getColumnName() +"\"))";
+                        break;
+                    case DOUBLE:
+                    case DOUBLE_OBJ:
+                        accessData = "results.getDouble(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.getColumnName() +"\"))";
+                        break;
+                    case FLOAT:
+                    case FLOAT_OBJ:
+                        accessData = "results.getFloat(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.getColumnName() +"\"))";
+                        break;
+                    case INTEGER:
+                    case INTEGER_OBJ:
+                        accessData = "results.getInt(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.getColumnName() +"\"))";
+                        break;
+                    case LONG:
+                    case LONG_OBJ:
+                        accessData = "results.getLong(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.getColumnName() +"\"))";
+                        break;
+                    case SHORT:
+                    case SHORT_OBJ:
+                        accessData = "results.getShort(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.getColumnName() +"\"))";
+                        break;
+                    case STRING:
+                        accessData = "results.getString(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.getColumnName() +"\"))";
+                        break;
+                }
+
+                if(accessData != null)
+                {
+                    StringBuilder sb = new StringBuilder();
+                    if(config.isUseGetSet())
+                    {
+                        sb.append("data.set").append(StringUtils.capitalize(config.getFieldName())).append("(")
+                                .append(accessData).append(")");
+                    }
+                    else
+                    {
+                        sb.append("data.").append(config.getFieldName()).append(" = ")
+                                .append(accessData);
+                    }
+
+                    builder.addStatement(sb.toString());
+                }
+            }
+        }
     }
 
     private CodeBlock getFieldConfig(FieldBindings config, String tableName) {
@@ -280,9 +458,9 @@ public class AnnotationProcessor extends AbstractProcessor {
         if (config.isForeignAutoRefresh()) {
             builder.addStatement("config.setForeignAutoRefresh($L)", config.isForeignAutoRefresh());
         }
-        if (config.getMaxForeignAutoRefreshLevel() != DatabaseField.NO_MAX_FOREIGN_AUTO_REFRESH_LEVEL_SPECIFIED) {
+        /*if (config.getMaxForeignAutoRefreshLevel() != DatabaseField.NO_MAX_FOREIGN_AUTO_REFRESH_LEVEL_SPECIFIED) {
             builder.addStatement("config.setMaxForeignAutoRefreshLevel($L)", config.getMaxForeignAutoRefreshLevel());
-        }
+        }*/
         if (!config.getPersisterClass().getQualifiedName().toString().equals("com.j256.ormlite.field.types.VoidType")) {
             builder.addStatement("config.setPersisterClass($T.class)", config.getPersisterClass());
         }
