@@ -50,6 +50,8 @@ import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
 import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.sql.SQLException;
 import java.text.SimpleDateFormat;
 import java.util.*;
@@ -85,7 +87,11 @@ public class AnnotationProcessor extends AbstractProcessor {
             return safeProcess(roundEnv);
         } catch (Exception e)
         {
-            messager.printMessage(Diagnostic.Kind.ERROR, e.getClass().getName());
+            StringWriter sq = new StringWriter();
+            PrintWriter printWriter = new PrintWriter(sq);
+            e.printStackTrace(printWriter);
+            messager.printMessage(Diagnostic.Kind.ERROR, e.getClass().getName() +"\n\n"+ sq
+            .toString() + "\n\n");
             return true;
         }
     }
@@ -278,7 +284,7 @@ public class AnnotationProcessor extends AbstractProcessor {
         makeCopyRows(javaFillMethodBuilder, element, tableName, fieldConfigs);
 
         javaFillMethodBuilder.addStatement("return data");
-        
+
         configBuilder.addMethod(javaFillMethodBuilder.build());
 
         MethodSpec.Builder tableConfigMethodBuilder = MethodSpec.methodBuilder("getTableConfig")
