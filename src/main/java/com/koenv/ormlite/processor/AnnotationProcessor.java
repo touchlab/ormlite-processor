@@ -110,6 +110,7 @@ public class AnnotationProcessor extends AbstractProcessor {
             TypeElement typeElement = (TypeElement) annotatedElement;
             String tableName = extractTableName(typeElement);
             List<FieldBindings> fieldConfigs = new ArrayList<FieldBindings>();
+            List<FieldTypeGen> fieldTypeGens = new ArrayList<FieldTypeGen>();
             // walk up the classes finding the fields
             TypeElement working = typeElement;
             while (working != null) {
@@ -121,17 +122,25 @@ public class AnnotationProcessor extends AbstractProcessor {
                             if (!databaseField.persisted()) {
                                 continue;
                             }
+                            FieldTypeGen fieldTypeGen = new FieldTypeGen(databaseType, annotatedElement, element, typeUtils, messager);
+
+                            if (fieldTypeGen != null) {
+                                fieldTypeGens.add(fieldTypeGen);
+                            }
+
                             FieldBindings fieldConfig = FieldBindings.fromDatabaseField(databaseType, element, databaseField, typeUtils, messager);
+
                             if (fieldConfig != null) {
                                 fieldConfigs.add(fieldConfig);
                             }
-                        } else if (element.getAnnotation(ForeignCollectionField.class) != null) {
+
+                        } /*else if (element.getAnnotation(ForeignCollectionField.class) != null) {
                             ForeignCollectionField foreignCollectionField = element.getAnnotation(ForeignCollectionField.class);
                             FieldBindings fieldConfig = FieldBindings.fromForeignCollection(element, foreignCollectionField);
                             if (fieldConfig != null) {
                                 fieldConfigs.add(fieldConfig);
                             }
-                        }
+                        }*/
                     }
                 }
                 if (working.getSuperclass().getKind().equals(TypeKind.NONE)) {
@@ -139,7 +148,7 @@ public class AnnotationProcessor extends AbstractProcessor {
                 }
                 working = (TypeElement) typeUtils.asElement(working.getSuperclass());
             }
-            if (fieldConfigs.isEmpty()) {
+            if (fieldTypeGens.isEmpty()) {
                 error(
                         typeElement,
                         "Every class annnotated with %s must have at least 1 field annotated with %s",
@@ -148,7 +157,7 @@ public class AnnotationProcessor extends AbstractProcessor {
                 );
                 return false;
             }
-            JavaFile javaFile = generateFile(typeElement, fieldConfigs, tableName);
+            JavaFile javaFile = generateFile(typeElement, fieldTypeGens, fieldConfigs, tableName);
             try {
                 javaFile.writeTo(filer);
             } catch (IOException e) {
@@ -257,7 +266,7 @@ public class AnnotationProcessor extends AbstractProcessor {
         return ParameterizedTypeName.get(Map.class, String.class, Integer.class);
     }
 
-    private JavaFile generateFile(TypeElement element, List<FieldBindings> fieldConfigs, String tableName) {
+    private JavaFile generateFile(TypeElement element, List<FieldTypeGen> fieldTypeGens, List<FieldBindings> fieldConfigs, String tableName) {
         ClassName className = ClassName.get(element);
         ClassName configName = ClassName.get(className.packageName(), Joiner.on('$').join(className.simpleNames()) + "$$Configuration");
 
@@ -281,7 +290,7 @@ public class AnnotationProcessor extends AbstractProcessor {
 
         javaFillMethodBuilder.addStatement("$T data = new $T()", className, className);
 
-        makeCopyRows(javaFillMethodBuilder, element, tableName, fieldConfigs);
+        makeCopyRows(javaFillMethodBuilder, element, tableName, fieldTypeGens);
 
         javaFillMethodBuilder.addStatement("return data");
 
@@ -327,10 +336,10 @@ public class AnnotationProcessor extends AbstractProcessor {
         return JavaFile.builder(configName.packageName(), configBuilder.build()).build();
     }
 
-    private void makeCopyRows(MethodSpec.Builder methodBuilder, TypeElement element, String tableName, List<FieldBindings> fieldConfigs)
+    private void makeCopyRows(MethodSpec.Builder methodBuilder, TypeElement element, String tableName, List<FieldTypeGen> fieldConfigs)
     {
         CodeBlock.Builder builder = CodeBlock.builder();
-        for (FieldBindings fieldConfig : fieldConfigs)
+        for (FieldTypeGen fieldConfig : fieldConfigs)
         {
             makeCopyRow(fieldConfig, builder);
         }
@@ -338,66 +347,64 @@ public class AnnotationProcessor extends AbstractProcessor {
     }
 
 
-    private void makeCopyRow(FieldBindings config, CodeBlock.Builder builder)
+    private void makeCopyRow(FieldTypeGen config, CodeBlock.Builder builder)
     {
-        if(!config.isForeignCollection())
-        {
-            if(config.isForeign())
+     
+            if(config.foreign)
             {
 
             } else
             {
                 String accessData = null;
 
-                switch (config.getDataType())
+                switch (config.dataType)
                 {
                     case BOOLEAN:
                     case BOOLEAN_OBJ:
-                        accessData = "results.getBoolean(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.getColumnName() +"\"))";
+                        accessData = "results.getBoolean(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.columnName +"\"))";
                         break;
                     case DOUBLE:
                     case DOUBLE_OBJ:
-                        accessData = "results.getDouble(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.getColumnName() +"\"))";
+                        accessData = "results.getDouble(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.columnName +"\"))";
                         break;
                     case FLOAT:
                     case FLOAT_OBJ:
-                        accessData = "results.getFloat(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.getColumnName() +"\"))";
+                        accessData = "results.getFloat(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.columnName +"\"))";
                         break;
                     case INTEGER:
                     case INTEGER_OBJ:
-                        accessData = "results.getInt(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.getColumnName() +"\"))";
+                        accessData = "results.getInt(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.columnName +"\"))";
                         break;
                     case LONG:
                     case LONG_OBJ:
-                        accessData = "results.getLong(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.getColumnName() +"\"))";
+                        accessData = "results.getLong(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.columnName +"\"))";
                         break;
                     case SHORT:
                     case SHORT_OBJ:
-                        accessData = "results.getShort(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.getColumnName() +"\"))";
+                        accessData = "results.getShort(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.columnName +"\"))";
                         break;
                     case STRING:
-                        accessData = "results.getString(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.getColumnName() +"\"))";
+                        accessData = "results.getString(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \""+ config.columnName +"\"))";
                         break;
                 }
 
                 if(accessData != null)
                 {
                     StringBuilder sb = new StringBuilder();
-                    if(config.isUseGetSet())
+                    if(config.useGetSet)
                     {
-                        sb.append("data.set").append(StringUtils.capitalize(config.getFieldName())).append("(")
+                        sb.append("data.set").append(StringUtils.capitalize(config.fieldName)).append("(")
                                 .append(accessData).append(")");
                     }
                     else
                     {
-                        sb.append("data.").append(config.getFieldName()).append(" = ")
+                        sb.append("data.").append(config.fieldName).append(" = ")
                                 .append(accessData);
                     }
 
                     builder.addStatement(sb.toString());
                 }
             }
-        }
     }
 
     private CodeBlock getFieldConfig(FieldBindings config, String tableName) {

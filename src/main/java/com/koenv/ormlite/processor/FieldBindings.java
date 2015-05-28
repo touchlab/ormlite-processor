@@ -24,10 +24,7 @@ import com.j256.ormlite.field.DatabaseField;
 import com.j256.ormlite.field.ForeignCollectionField;
 
 import javax.annotation.processing.Messager;
-import javax.lang.model.element.Element;
-import javax.lang.model.element.ElementKind;
-import javax.lang.model.element.TypeElement;
-import javax.lang.model.element.VariableElement;
+import javax.lang.model.element.*;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.MirroredTypeException;
 import javax.lang.model.type.TypeKind;
@@ -282,10 +279,12 @@ public class FieldBindings {
             bindings.columnName = variableElement.getSimpleName().toString();
 
         bindings.dataType = databaseField.dataType();
+
+
         if(bindings.dataType == DataType.UNKNOWN)
         {
-
             TypeMirror typeMirror = variableElement.asType();
+
             TypeKind kind = typeMirror.getKind();
             if(kind.isPrimitive())
             {
@@ -315,7 +314,9 @@ public class FieldBindings {
             }
             else
             {
-                String theType = ((TypeElement) ((DeclaredType) typeMirror).asElement()).getQualifiedName().toString();
+                DeclaredType declaredType = (DeclaredType) typeMirror;
+
+                String theType = ((TypeElement) declaredType.asElement()).getQualifiedName().toString();
                 if(theType.equals("java.lang.String"))
                     bindings.dataType = DataType.STRING;
             }
@@ -332,6 +333,12 @@ public class FieldBindings {
         bindings.generatedIdSequence = valueIfNotBlank(databaseField.generatedIdSequence());
         bindings.foreign = databaseField.foreign();
         bindings.useGetSet = databaseField.useGetSet();
+
+        if(!bindings.useGetSet && !variableElement.getModifiers().contains(Modifier.PUBLIC))
+        {
+            bindings.useGetSet = true;
+        }
+
         bindings.unknownEnumValue = findMatchingEnumVal(field, databaseField.unknownEnumName(), messager);
         bindings.throwIfNull = databaseField.throwIfNull();
         bindings.format = valueIfNotBlank(databaseField.format());
