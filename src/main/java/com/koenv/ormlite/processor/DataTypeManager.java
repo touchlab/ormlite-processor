@@ -113,7 +113,7 @@ public class DataTypeManager
 		throw new RuntimeException("fuck");
 	}
 
-	private static String findFieldClassname(VariableElement fieldElement)
+	public static String findFieldClassname(VariableElement fieldElement)
 	{
 		TypeMirror typeMirror = fieldElement.asType();
 		TypeKind kind = typeMirror.getKind();

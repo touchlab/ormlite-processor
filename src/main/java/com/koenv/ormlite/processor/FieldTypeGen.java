@@ -37,11 +37,13 @@ public class FieldTypeGen
 
 	public String tableName;
 	public final String columnName;
-	public FieldBindings fieldBindings;
 	public final boolean isId;
 	public final boolean isGeneratedId;
 	public final boolean foreign;
 	public final boolean useGetSet;
+	public final DatabaseField databaseField;
+	public final String dataTypeClassname;
+
 	//TypeMirror?
 	public TypeMirror parentClass;
 	public String fieldName;
@@ -59,13 +61,16 @@ public class FieldTypeGen
 	private BaseDaoImpl<?, ?> foreignDao;
 	private MappedQueryForId<Object, Object> mappedQueryForId;
 
+
 	public FieldTypeGen(DatabaseType databaseType, Element databaseElement, Element fieldElement, Types typeUtils, Messager messager)
 	{
-		DatabaseField databaseField = fieldElement.getAnnotation(DatabaseField.class);
+		databaseField = fieldElement.getAnnotation(DatabaseField.class);
+
 //		FieldBindings fieldBindings = FieldBindings.fromDatabaseField(databaseType, fieldElement, databaseField, typeUtils, messager);
 		this.tableName = extractTableName((TypeElement) databaseElement);
 		this.fieldName = fieldElement.getSimpleName().toString();;
 		VariableElement variableElement = (VariableElement) fieldElement;
+		dataTypeClassname = DataTypeManager.findFieldClassname(variableElement);
 		this.columnName = extractColumnName(variableElement);
 		this.foreign = databaseField.foreign();
 
