@@ -299,7 +299,7 @@ public class AnnotationProcessor extends AbstractProcessor
 
 		fillRow(element, fieldTypeGens, tableName, className, configBuilder);
 		assignVersion(className, configBuilder);
-		assignId(className, configBuilder);
+		assignId(fieldTypeGens, className, configBuilder);
 		extractId(fieldTypeGens, className, configBuilder);
 		extractVersion(fieldTypeGens, className, configBuilder);
 		extractVals(fieldTypeGens, className, configBuilder);
@@ -392,31 +392,30 @@ public class AnnotationProcessor extends AbstractProcessor
 		);
 	}
 
-	private void assignId(ClassName className, TypeSpec.Builder configBuilder)
+	private void assignId(List<FieldTypeGen> fieldTypeGens, ClassName className, TypeSpec.Builder configBuilder)
 	{
-		configBuilder.addMethod(MethodSpec
-						.methodBuilder("assignId")
-						.addModifiers(Modifier.PUBLIC)
-						.addAnnotation(Override.class)
-						.addParameter(className, "data")
-						.addParameter(Object.class, "val")
+		FieldTypeGen idField = findIdField(fieldTypeGens);
+
+		MethodSpec.Builder methodBuilder = MethodSpec
+				.methodBuilder("assignId")
+				.addModifiers(Modifier.PUBLIC)
+				.addAnnotation(Override.class)
+				.addParameter(className, "data")
+				.addParameter(Object.class, "val");
+
+		methodBuilder.addCode(CodeBlock.builder()
+						.addStatement("data.$N = ((java.lang.Number)val).intValue()", idField.fieldName)
+				.build()
+		);
+
+		configBuilder.addMethod(methodBuilder
 						.build()
 		);
 	}
 
 	private void extractId(List<FieldTypeGen> fieldTypeGens, ClassName className, TypeSpec.Builder configBuilder)
 	{
-		FieldTypeGen idField = null;
-		for (FieldTypeGen fieldTypeGen : fieldTypeGens)
-		{
-			if (fieldTypeGen.isId || fieldTypeGen.isGeneratedId)
-			{
-				idField = fieldTypeGen;
-			}
-		}
-
-		if (idField == null)
-			throw new IllegalArgumentException("Need id");
+		FieldTypeGen idField = findIdField(fieldTypeGens);
 
 		MethodSpec.Builder methodBody = MethodSpec
 				.methodBuilder("extractId")
@@ -431,6 +430,22 @@ public class AnnotationProcessor extends AbstractProcessor
 		configBuilder.addMethod(methodBody
 						.build()
 		);
+	}
+
+	private FieldTypeGen findIdField(List<FieldTypeGen> fieldTypeGens)
+	{
+		FieldTypeGen idField = null;
+		for (FieldTypeGen fieldTypeGen : fieldTypeGens)
+		{
+			if (fieldTypeGen.isId || fieldTypeGen.isGeneratedId)
+			{
+				idField = fieldTypeGen;
+			}
+		}
+
+		if (idField == null)
+			throw new IllegalArgumentException("Need id");
+		return idField;
 	}
 
 	private void extractVersion(List<FieldTypeGen> fieldTypeGens, ClassName className, TypeSpec.Builder configBuilder)
@@ -618,13 +633,13 @@ public class AnnotationProcessor extends AbstractProcessor
 						databaseField.uniqueCombo(),
 						databaseField.index(),
 						databaseField.uniqueIndex(),
-						databaseField.indexName(),
-						databaseField.uniqueIndexName(),
-						config.defaultValue,
-						databaseField.throwIfNull(),
-						databaseField.version(),
-						databaseField.readOnly()
-				);
+						StringUtils.trimToNull(databaseField.indexName()),
+						StringUtils.trimToNull(databaseField.uniqueIndexName()),
+								config.defaultValue,
+								databaseField.throwIfNull(),
+								databaseField.version(),
+								databaseField.readOnly()
+						);
 
 
 
