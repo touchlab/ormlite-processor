@@ -302,7 +302,8 @@ public class AnnotationProcessor extends AbstractProcessor
 		assignId(fieldTypeGens, className, configBuilder);
 		extractId(fieldTypeGens, className, configBuilder);
 		extractVersion(fieldTypeGens, className, configBuilder);
-		extractVals(fieldTypeGens, className, configBuilder);
+		extractVals(fieldTypeGens, className, configBuilder, "extractVals", false);
+		extractVals(fieldTypeGens, className, configBuilder, "extractCreateVals", true);
 
 		MethodSpec fieldConfigsMethod = fieldConfigs(fieldTypeGens, tableName, className, configBuilder);
 
@@ -403,10 +404,16 @@ public class AnnotationProcessor extends AbstractProcessor
 				.addParameter(className, "data")
 				.addParameter(Object.class, "val");
 
-		methodBuilder.addCode(CodeBlock.builder()
-						.addStatement("data.$N = ((java.lang.Number)val).intValue()", idField.fieldName)
-				.build()
-		);
+		if(idField.useGetSet)
+			methodBuilder.addCode(CodeBlock.builder()
+							.addStatement("data.set$N(((java.lang.Number)val).intValue())", StringUtils.capitalize(idField.fieldName))
+							.build()
+			);
+		else
+			methodBuilder.addCode(CodeBlock.builder()
+							.addStatement("data.$N = ((java.lang.Number)val).intValue()", idField.fieldName)
+							.build()
+			);
 
 		configBuilder.addMethod(methodBuilder
 						.build()
@@ -425,7 +432,10 @@ public class AnnotationProcessor extends AbstractProcessor
 				.addParameter(className, "data")
 				.returns(ClassName.bestGuess(idField.dataTypeClassname));
 
-		methodBody.addStatement("return data."+ idField.fieldName);
+		if (idField.useGetSet)
+			methodBody.addStatement("return data.get"+ StringUtils.capitalize(idField.fieldName) +"()");
+		else
+			methodBody.addStatement("return data."+ idField.fieldName);
 
 		configBuilder.addMethod(methodBody
 						.build()
@@ -466,25 +476,49 @@ public class AnnotationProcessor extends AbstractProcessor
 		);
 	}
 
-	private void extractVals(List<FieldTypeGen> fieldTypeGens, ClassName className, TypeSpec.Builder configBuilder)
+	private void extractVals(List<FieldTypeGen> fieldTypeGens, ClassName className, TypeSpec.Builder configBuilder, String methodName, boolean createVals)
 	{
 		MethodSpec.Builder returns = MethodSpec
-				.methodBuilder("extractVals")
+				.methodBuilder(methodName)
 				.addModifiers(Modifier.PUBLIC)
 				.addAnnotation(Override.class)
-
 				.addParameter(className, "data")
+
 				.returns(Object[].class);
 
-		CodeBlock.Builder builder = CodeBlock.builder();
-		builder.addStatement("$T<Object> fields = new $T()", List.class, ArrayList.class);
 
+
+		List<String> assignStatements = new ArrayList<String>();
+
+		int count = 0;
 		for (FieldTypeGen fieldTypeGen : fieldTypeGens)
 		{
-			builder.addStatement("fields.add(data.$N)", fieldTypeGen.fieldName);
+			StringBuilder sb = new StringBuilder();
+
+			if(!(createVals && fieldTypeGen.isGeneratedId))
+			{
+				if (fieldTypeGen.useGetSet)
+				{
+					sb.append("fields[").append(count).append("] = data.get").append(StringUtils.capitalize(fieldTypeGen.fieldName)).append("(").append(")");
+				} else
+				{
+					sb.append("fields[").append(count).append("] = data.").append(fieldTypeGen.fieldName).append("");
+				}
+
+				count++;
+				assignStatements.add(sb.toString());
+			}
 		}
 
-		builder.addStatement("return fields.toArray(new Object[fields.size()])");
+		CodeBlock.Builder builder = CodeBlock.builder();
+		builder.addStatement("Object[] fields = new Object[$L]", assignStatements.size());
+
+		for (String assignStatement : assignStatements)
+		{
+			builder.addStatement(assignStatement);
+		}
+
+		builder.addStatement("return fields");
 
 		returns.addCode(builder.build());
 		configBuilder.addMethod(returns
@@ -518,30 +552,30 @@ public class AnnotationProcessor extends AbstractProcessor
 			{
 				case BOOLEAN:
 				case BOOLEAN_OBJ:
-					accessData = "results.getBoolean(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \"" + config.columnName + "\"))";
+					accessData = "results.getBoolean(" + count + ")";
 					break;
 				case DOUBLE:
 				case DOUBLE_OBJ:
-					accessData = "results.getDouble(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \"" + config.columnName + "\"))";
+					accessData = "results.getDouble(" + count + ")";
 					break;
 				case FLOAT:
 				case FLOAT_OBJ:
-					accessData = "results.getFloat(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \"" + config.columnName + "\"))";
+					accessData = "results.getFloat(" + count + ")";
 					break;
 				case INTEGER:
 				case INTEGER_OBJ:
-					accessData = "results.getInt(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \"" + config.columnName + "\"))";
+					accessData = "results.getInt(" + count + ")";
 					break;
 				case LONG:
 				case LONG_OBJ:
-					accessData = "results.getLong(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \"" + config.columnName + "\"))";
+					accessData = "results.getLong(" + count + ")";
 					break;
 				case SHORT:
 				case SHORT_OBJ:
-					accessData = "results.getShort(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \"" + config.columnName + "\"))";
+					accessData = "results.getShort(" + count + ")";
 					break;
 				case STRING:
-					accessData = "results.getString(com.koenv.ormlite.processor.OrmLiteHelper.findDbColumn(results, columnPositions, \"" + config.columnName + "\"))";
+					accessData = "results.getString(" + count + ")";
 					break;
 				default:
 					accessData = "(" + config.dataTypeClassname + ")fieldConfigs[" + count + "].getDataPersister().resultToJava(fieldConfigs[" + count + "], results, " + count + ")";
