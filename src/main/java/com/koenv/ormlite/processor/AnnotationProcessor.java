@@ -94,11 +94,27 @@ public class AnnotationProcessor extends AbstractProcessor
 		}
 	}
 
+	private class DatabaseTableHolder
+	{
+		public final Element annoDatabaseTableElement;
+		public final List<FieldTypeGen> fieldTypeGens;
+		public final TypeElement typeElement;
+		public final String tableName;
+
+		public DatabaseTableHolder(Element annoDatabaseTableElement, List<FieldTypeGen> fieldTypeGens, TypeElement typeElement, String tableName)
+		{
+			this.annoDatabaseTableElement = annoDatabaseTableElement;
+			this.fieldTypeGens = fieldTypeGens;
+			this.typeElement = typeElement;
+			this.tableName = tableName;
+		}
+	}
 	private boolean safeProcess(RoundEnvironment roundEnv)
 	{
 		baseClasses = new ArrayList<ClassName>();
 		generatedClasses = new ArrayList<ClassName>();
 
+		List<DatabaseTableHolder> tableHolders = new ArrayList<DatabaseTableHolder>();
 
 		for (Element annotatedElement : roundEnv.getElementsAnnotatedWith(DatabaseTable.class))
 		{
@@ -158,13 +174,20 @@ public class AnnotationProcessor extends AbstractProcessor
 				);
 				return false;
 			}
-			JavaFile javaFile = generateFile(typeElement, fieldTypeGens, tableName);
+
+			tableHolders.add(new DatabaseTableHolder(annotatedElement, fieldTypeGens, typeElement, tableName));
+		}
+
+		for (DatabaseTableHolder tableHolder : tableHolders)
+		{
+			JavaFile javaFile = generateClassConfigFile(tableHolders, tableHolder.typeElement, tableHolder.fieldTypeGens, tableHolder.tableName);
+
 			try
 			{
 				javaFile.writeTo(filer);
 			} catch (IOException e)
 			{
-				error(typeElement, "Code gen failed: " + e);
+				error(tableHolder.typeElement, "Code gen failed: " + e);
 				return false;
 			}
 		}
@@ -264,34 +287,41 @@ public class AnnotationProcessor extends AbstractProcessor
 		return ParameterizedTypeName.get(Map.class, String.class, Integer.class);
 	}
 
-	private JavaFile generateFile(TypeElement element, List<FieldTypeGen> fieldTypeGens, String tableName)
+	private JavaFile generateClassConfigFile(List<DatabaseTableHolder> databaseTableHolders, TypeElement element, List<FieldTypeGen> fieldTypeGens, String tableName)
 	{
-		ClassName className = ClassName.get(element);
-		ClassName idType = ClassName.bestGuess("java.lang.Integer");
-		ClassName configName = ClassName.get(className.packageName(), Joiner.on('$').join(className.simpleNames()) + "$$Configuration");
+		ConfigureClassDefinitions configureClassDefinitions = new ConfigureClassDefinitions(databaseTableHolders, element).invoke();
+		ClassName configName = configureClassDefinitions.getConfigName();
+		ClassName className = configureClassDefinitions.getClassName();
+		ClassName idType = configureClassDefinitions.getIdType();
+
+		FieldSpec staticInstanceField = FieldSpec.builder(configName, "instance", Modifier.PUBLIC, Modifier.FINAL, Modifier.STATIC)
+				.initializer("new $T()", configName)
+				.build();
 
 		TypeSpec.Builder configBuilder = TypeSpec.classBuilder(configName.simpleName())
-
 				.addModifiers(Modifier.PUBLIC, Modifier.FINAL)
 				.addField(FieldType[].class, "fieldConfigs")
+				.addField(staticInstanceField)
 				.addSuperinterface(ParameterizedTypeName.get(ClassName.get(GeneratedTableMapper.class), className, idType))
 				.addJavadoc("Generated on $L\n", new SimpleDateFormat("yyyy/MM/dd hh:mm:ss").format(new Date()));
 
+
 		MethodSpec constructor = MethodSpec.constructorBuilder()
 				.addModifiers(Modifier.PUBLIC)
-				.addException(SQLException.class)
+//				.addException(SQLException.class)
 				.addStatement("this.$N = $N()", "fieldConfigs", "getFieldConfigs")
 				.build();
 
 		configBuilder.addMethod(constructor);
 
-		fillRow(element, fieldTypeGens, tableName, className, configBuilder);
+		createObject(className, configBuilder);
+		fillRow(databaseTableHolders, element, fieldTypeGens, tableName, className, configBuilder);
 		assignVersion(className, configBuilder);
 		assignId(fieldTypeGens, className, configBuilder);
 		extractId(fieldTypeGens, className, configBuilder);
 		extractVersion(fieldTypeGens, className, configBuilder);
-		extractVals(fieldTypeGens, className, configBuilder, "extractVals", false);
-		extractVals(fieldTypeGens, className, configBuilder, "extractCreateVals", true);
+		extractVals(databaseTableHolders, fieldTypeGens, className, configBuilder, "extractVals", false);
+		extractVals(databaseTableHolders, fieldTypeGens, className, configBuilder, "extractCreateVals", true);
 
 		MethodSpec fieldConfigsMethod = fieldConfigs(fieldTypeGens, tableName, className, configBuilder);
 
@@ -330,7 +360,7 @@ public class AnnotationProcessor extends AbstractProcessor
 
 		MethodSpec.Builder fieldConfigsMethodBuilder = MethodSpec.methodBuilder("getFieldConfigs")
 				.addModifiers(Modifier.PUBLIC, Modifier.STATIC)
-				.addException(SQLException.class)
+//				.addException(SQLException.class)
 				.returns(FieldType[].class)
 				.addStatement("$T list = new $T()", listOfFieldConfigs, arrayListOfFieldConfigs);
 
@@ -350,21 +380,29 @@ public class AnnotationProcessor extends AbstractProcessor
 		return fieldConfigsMethod;
 	}
 
-	private void fillRow(TypeElement element, List<FieldTypeGen> fieldTypeGens, String tableName, ClassName className, TypeSpec.Builder configBuilder)
+	private void createObject(ClassName className, TypeSpec.Builder configBuilder)
 	{
-		MethodSpec.Builder javaFillMethodBuilder = MethodSpec.methodBuilder("fillRow")
+		MethodSpec.Builder javaFillMethodBuilder = MethodSpec.methodBuilder("createObject")
 				.addModifiers(Modifier.PUBLIC)
-				.addParameter(DatabaseResults.class, "results")
-				.addParameter(createColPositionsType(), "columnPositions")
-				.addException(SQLException.class)
 				.addAnnotation(Override.class)
 				.returns(className);
 
 		javaFillMethodBuilder.addStatement("$T data = new $T()", className, className);
-
-		makeCopyRows(javaFillMethodBuilder, element, tableName, fieldTypeGens);
-
 		javaFillMethodBuilder.addStatement("return data");
+
+		configBuilder.addMethod(javaFillMethodBuilder.build());
+	}
+
+	private void fillRow(List<DatabaseTableHolder> databaseTableHolders, TypeElement element, List<FieldTypeGen> fieldTypeGens, String tableName, ClassName className, TypeSpec.Builder configBuilder)
+	{
+		MethodSpec.Builder javaFillMethodBuilder = MethodSpec.methodBuilder("fillRow")
+				.addModifiers(Modifier.PUBLIC)
+				.addParameter(className, "data")
+				.addParameter(DatabaseResults.class, "results")
+				.addException(SQLException.class)
+				.addAnnotation(Override.class);
+
+		makeCopyRows(databaseTableHolders, javaFillMethodBuilder, element, tableName, fieldTypeGens);
 
 		configBuilder.addMethod(javaFillMethodBuilder.build());
 	}
@@ -394,12 +432,12 @@ public class AnnotationProcessor extends AbstractProcessor
 
 		if(idField.useGetSet)
 			methodBuilder.addCode(CodeBlock.builder()
-							.addStatement("data.set$N(((java.lang.Number)val).intValue())", StringUtils.capitalize(idField.fieldName))
+							.addStatement("data.set$N(($N)val)", StringUtils.capitalize(idField.fieldName), idField.dataTypeClassname)
 							.build()
 			);
 		else
 			methodBuilder.addCode(CodeBlock.builder()
-							.addStatement("data.$N = ((java.lang.Number)val).intValue()", idField.fieldName)
+							.addStatement("data.$N = ($N)val", idField.fieldName, idField.dataTypeClassname)
 							.build()
 			);
 
@@ -489,7 +527,7 @@ public class AnnotationProcessor extends AbstractProcessor
 		return false;
 	}
 
-	private void extractVals(List<FieldTypeGen> fieldTypeGens, ClassName className, TypeSpec.Builder configBuilder, String methodName, boolean createVals)
+	private void extractVals(List<DatabaseTableHolder> databaseTableHolders, List<FieldTypeGen> fieldTypeGens, ClassName className, TypeSpec.Builder configBuilder, String methodName, boolean createVals)
 	{
 		MethodSpec.Builder returns = MethodSpec
 				.methodBuilder(methodName)
@@ -499,6 +537,7 @@ public class AnnotationProcessor extends AbstractProcessor
 				.addParameter(className, "data")
 				.returns(Object[].class);
 
+		
 		List<String> assignStatements = new ArrayList<String>();
 		List<String> convertStatements = new ArrayList<String>();
 
@@ -521,8 +560,17 @@ public class AnnotationProcessor extends AbstractProcessor
 				StringBuilder convertBuilder = null;
 				if(!isStaticType(fieldTypeGen.dataType))
 				{
-					convertBuilder = new StringBuilder();
-					convertBuilder.append("fields[").append(count).append("] = fieldConfigs[").append(configCount).append("].getDataPersister().javaToSqlArg(fieldConfigs[").append(configCount).append("], fields[").append(count).append("])");
+					if(fieldTypeGen.foreign)
+					{
+						ConfigureClassDefinitions configureClassDefinitions = new ConfigureClassDefinitions(databaseTableHolders, (TypeElement)fieldTypeGen.databaseElement).invoke();
+						convertBuilder = new StringBuilder();
+						convertBuilder.append("fields[").append(count).append("] = ").append(configureClassDefinitions.configName.toString()).append(".instance.extractId(").append("fields[").append(count).append("])");
+					}
+					else
+					{
+						convertBuilder = new StringBuilder();
+						convertBuilder.append("fields[").append(count).append("] = fieldConfigs[").append(configCount).append("].getDataPersister().javaToSqlArg(fieldConfigs[").append(configCount).append("], fields[").append(count).append("])");
+					}
 				}
 
 				count++;
@@ -555,30 +603,48 @@ public class AnnotationProcessor extends AbstractProcessor
 		);
 	}
 
-	private void makeCopyRows(MethodSpec.Builder methodBuilder, TypeElement element, String tableName, List<FieldTypeGen> fieldConfigs)
+	private void makeCopyRows(List<DatabaseTableHolder> databaseTableHolders, MethodSpec.Builder methodBuilder, TypeElement element, String tableName, List<FieldTypeGen> fieldConfigs)
 	{
 		CodeBlock.Builder builder = CodeBlock.builder();
 		int count = 0;
 		for (FieldTypeGen fieldConfig : fieldConfigs)
 		{
-			makeCopyRow(fieldConfig, builder, count++);
+			makeCopyRow(databaseTableHolders, element, fieldConfig, builder, count++);
 		}
 		methodBuilder.addCode(builder.build());
 	}
 
 
-	private void makeCopyRow(FieldTypeGen config, CodeBlock.Builder builder, int count)
+	private void makeCopyRow(List<DatabaseTableHolder> databaseTableHolders, TypeElement fieldElement, FieldTypeGen config, CodeBlock.Builder builder, int count)
 	{
+		DataType dataType = null;
 
 		if (config.foreign)
 		{
-
+			for (DatabaseTableHolder databaseTableHolder : databaseTableHolders)
+			{
+				System.out.println("Find foreign: "+ databaseTableHolder.typeElement.getQualifiedName() + "/" + fieldElement.getQualifiedName());
+				if(databaseTableHolder.typeElement.getQualifiedName().equals(fieldElement.getQualifiedName()))
+				{
+					for (FieldTypeGen fieldTypeGen : databaseTableHolder.fieldTypeGens)
+					{
+						if(fieldTypeGen.isId || fieldTypeGen.isGeneratedId)
+						{
+							dataType = fieldTypeGen.dataType;
+						}
+					}
+				}
+			}
 		} else
+		{
+			dataType = config.dataType;
+		}
+
 		{
 			String accessData = null;
 			boolean checkNull = config.databaseField.canBeNull();
 
-			switch (config.dataType)
+			switch (dataType)
 			{
 				case BOOLEAN:
 				case BOOLEAN_OBJ:
@@ -615,21 +681,51 @@ public class AnnotationProcessor extends AbstractProcessor
 			if (accessData != null)
 			{
 				StringBuilder sb = new StringBuilder();
-				if(checkNull)
-					sb.append("if(!results.wasNull("+ count+"))");
-				if (config.useGetSet)
+
+				if(config.foreign)
 				{
-					sb.append("data.set").append(StringUtils.capitalize(config.fieldName)).append("(")
-							.append(accessData).append(")");
-				} else
-				{
-					sb.append("data.").append(config.fieldName).append(" = ")
-							.append(accessData);
+					ClassName className = ClassName.get(fieldElement);
+					ClassName configName = ClassName.get(className.packageName(), Joiner.on('$').join(className.simpleNames()) + "$$Configuration");
+
+					CodeBlock.Builder foreignBuilder = CodeBlock.builder();
+					foreignBuilder.add("if(!results.wasNull(" + count + ")){");
+					foreignBuilder.addStatement("$T __$N = $T.instance.createObject()", className, config.fieldName, configName);
+					foreignBuilder.addStatement("$T.instance.assignId(__$N, $N)", configName, config.fieldName, accessData);
+
+
+					if (config.useGetSet)
+					{
+						sb.append("data.set").append(StringUtils.capitalize(config.fieldName)).append("(")
+								.append("__"+ config.fieldName).append(")");
+					} else
+					{
+						sb.append("data.").append(config.fieldName).append(" = ")
+								.append("__"+ config.fieldName);
+					}
+
+					foreignBuilder.addStatement(sb.toString());
+					foreignBuilder.add("}");
+					builder.add(foreignBuilder.build());
+
 				}
+				else
+				{
+					if(checkNull)
+						sb.append("if(!results.wasNull("+ count+"))");
 
-				builder.addStatement(sb.toString());
+					if (config.useGetSet)
+					{
+						sb.append("data.set").append(StringUtils.capitalize(config.fieldName)).append("(")
+								.append(accessData).append(")");
+					} else
+					{
+						sb.append("data.").append(config.fieldName).append(" = ")
+								.append(accessData);
+					}
+
+					builder.addStatement(sb.toString());
+				}
 			}
-
 		}
 	}
 
@@ -645,7 +741,7 @@ public class AnnotationProcessor extends AbstractProcessor
 								"$L," + //isId
 								"$L," +
 								"$L," +
-								"$T.$L," +
+								(config.dataType == null ? "$L$L," : "$T.$L,") +
 								"$L," +
 								"$L," + //canBeNull
 								"$S," +
@@ -668,8 +764,9 @@ public class AnnotationProcessor extends AbstractProcessor
 						config.isId,
 						config.isGeneratedId,
 						config.foreign,
-						DataType.class,
-						config.dataType,
+						//TODO: NULL data type for foreign
+						config.dataType == null ? "" : DataType.class,
+						config.dataType == null ? "null" : config.dataType,
 						databaseField.width(),
 						databaseField.canBeNull(),
 						StringUtils.trimToNull(databaseField.format()),
@@ -715,14 +812,73 @@ public class AnnotationProcessor extends AbstractProcessor
 	{
 		DatabaseTable databaseTable = element.getAnnotation(DatabaseTable.class);
 		String name;
-		if (databaseTable != null && databaseTable.tableName() != null && databaseTable.tableName().length() > 0)
+		if (databaseTable != null && StringUtils.isNoneEmpty(databaseTable.tableName()))
 		{
 			name = databaseTable.tableName();
-		} else
+		}
+		else
 		{
 			// if the name isn't specified, it is the class name lowercased
 			name = element.getSimpleName().toString().toLowerCase();
 		}
 		return name;
+	}
+
+	private class ConfigureClassDefinitions
+	{
+		private List<DatabaseTableHolder> databaseTableHolders;
+		private TypeElement element;
+		private ClassName className;
+		private ClassName idType;
+		private ClassName configName;
+
+		public ConfigureClassDefinitions(List<DatabaseTableHolder> databaseTableHolders, TypeElement element)
+		{
+			this.databaseTableHolders = databaseTableHolders;
+			this.element = element;
+		}
+
+		public ClassName getClassName()
+		{
+			return className;
+		}
+
+		public ClassName getIdType()
+		{
+			return idType;
+		}
+
+		public ClassName getConfigName()
+		{
+			return configName;
+		}
+
+		public ConfigureClassDefinitions invoke()
+		{
+			DatabaseTableHolder myTableHolder = null;
+
+			for (DatabaseTableHolder databaseTableHolder : databaseTableHolders)
+			{
+				if(databaseTableHolder.typeElement.getQualifiedName().equals(element.getQualifiedName()))
+				{
+					myTableHolder = databaseTableHolder;
+					break;
+				}
+			}
+
+			FieldTypeGen idFieldGen = null;
+			for (FieldTypeGen fieldTypeGen : myTableHolder.fieldTypeGens)
+			{
+				if(fieldTypeGen.isId || fieldTypeGen.isGeneratedId)
+				{
+					idFieldGen = fieldTypeGen;
+					break;
+				}
+			}
+			className = ClassName.get(element);
+			idType = ClassName.bestGuess(idFieldGen.dataTypeClassname);
+			configName = ClassName.get(className.packageName(), Joiner.on('$').join(className.simpleNames()) + "$$Configuration");
+			return this;
+		}
 	}
 }

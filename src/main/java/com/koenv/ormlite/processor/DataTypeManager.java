@@ -4,6 +4,7 @@ import com.j256.ormlite.field.DataPersister;
 import com.j256.ormlite.field.DataType;
 import com.j256.ormlite.field.types.EnumStringType;
 
+import javax.lang.model.element.Element;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.*;
@@ -73,7 +74,7 @@ public class DataTypeManager
 	 *
 	 * @return The associated data-type interface or null if none found.
 	 */
-	public static DataType lookupForField(VariableElement variableElement) {
+	public static DataType lookupForField(Element variableElement) {
 
 		String fieldClassName = findFieldClassname(variableElement);
 		/*// see if the any of the registered persisters are valid first
@@ -113,7 +114,7 @@ public class DataTypeManager
 		throw new RuntimeException("fuck");
 	}
 
-	public static String findFieldClassname(VariableElement fieldElement)
+	public static String findFieldClassname(Element fieldElement)
 	{
 		TypeMirror typeMirror = fieldElement.asType();
 		TypeKind kind = typeMirror.getKind();

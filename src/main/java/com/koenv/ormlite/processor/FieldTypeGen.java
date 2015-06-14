@@ -15,7 +15,6 @@ import javax.annotation.processing.Messager;
 import javax.lang.model.element.*;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.MirroredTypeException;
-import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
@@ -26,6 +25,8 @@ import java.sql.SQLException;
  */
 public class FieldTypeGen
 {
+	public static final String FOREIGN_ID_FIELD_SUFFIX = "_id";
+
 	private static boolean DEFAULT_VALUE_BOOLEAN;
 	private static byte DEFAULT_VALUE_BYTE;
 	private static char DEFAULT_VALUE_CHAR;
@@ -34,6 +35,7 @@ public class FieldTypeGen
 	private static long DEFAULT_VALUE_LONG;
 	private static float DEFAULT_VALUE_FLOAT;
 	private static double DEFAULT_VALUE_DOUBLE;
+	public final Element databaseElement;
 
 	public String tableName;
 	public final String columnName;
@@ -66,12 +68,13 @@ public class FieldTypeGen
 	{
 		databaseField = fieldElement.getAnnotation(DatabaseField.class);
 
+		this.databaseElement = databaseElement;
 //		FieldBindings fieldBindings = FieldBindings.fromDatabaseField(databaseType, fieldElement, databaseField, typeUtils, messager);
 		this.tableName = extractTableName((TypeElement) databaseElement);
-		this.fieldName = fieldElement.getSimpleName().toString();;
+		this.fieldName = fieldElement.getSimpleName().toString();
 		VariableElement variableElement = (VariableElement) fieldElement;
 		dataTypeClassname = DataTypeManager.findFieldClassname(variableElement);
-		this.columnName = extractColumnName(variableElement);
+
 		this.foreign = databaseField.foreign();
 
 		this.useGetSet = databaseField.useGetSet() || !variableElement.getModifiers().contains(Modifier.PUBLIC);
@@ -81,24 +84,31 @@ public class FieldTypeGen
 		// post process our config settings
 //		fieldConfig.postProcess();
 
-		dataType = DataTypeManager.lookupForField(variableElement);
+		if(foreign)
+			dataType = null;
+		else
+			dataType = DataTypeManager.lookupForField(variableElement);
+
 		persisterClass = findPersisterClass(databaseField, typeUtils, messager);
 
 		//OH SHIT FOREIGN
-/*
-		String foreignColumnName = fieldConfig.getForeignColumnName();
+
+		String foreignColumnName = StringUtils.trimToNull(databaseField.foreignColumnName());
 		String defaultFieldName = fieldName;
-		if (fieldConfig.isForeign() || fieldConfig.isForeignAutoRefresh() || foreignColumnName != null) {
-			if (dataPersister != null && dataPersister.isPrimitive()) {
+		if (databaseField.foreign() || databaseField.foreignAutoRefresh() || foreignColumnName != null) {
+			//TODO: Check if foreign id is primitive
+			/*if (dataPersister != null && dataPersister.isPrimitive()) {
 				throw new IllegalArgumentException("Field " + this + " is a primitive class "
 						+ " but marked as foreign");
-			}
+			}*/
 			if (foreignColumnName == null) {
 				defaultFieldName = defaultFieldName + FOREIGN_ID_FIELD_SUFFIX;
 			} else {
 				defaultFieldName = defaultFieldName + "_" + foreignColumnName;
 			}
-		}  else if (dataPersister == null && (!fieldConfig.isForeignCollection())) {
+		}
+		//TODO: WTF is this?
+		/*else if (dataPersister == null && (!fieldConfig.isForeignCollection())) {
 			if (byte[].class.isAssignableFrom(clazz)) {
 				throw new SQLException("ORMLite does not know how to store " + clazz + " for field '" + fieldName
 						+ "'. byte[] fields must specify dataType=DataType.BYTE_ARRAY or SERIALIZABLE");
@@ -111,6 +121,12 @@ public class FieldTypeGen
 						+ fieldName + ". Use another class or a custom persister.");
 			}
 		}*/
+
+		if (StringUtils.isEmpty(databaseField.columnName())) {
+			this.columnName = defaultFieldName;
+		} else {
+			this.columnName = databaseField.columnName();
+		}
 
 		if (databaseField.id()) {
 			if (databaseField.generatedId()) {
@@ -131,23 +147,24 @@ public class FieldTypeGen
 			throw new IllegalArgumentException("Id field " + fieldName + " cannot also be a foreign object");
 		}
 		//extra validation
-		/*if (fieldConfig.isAllowGeneratedIdInsert() && !fieldConfig.isGeneratedId()) {
-			throw new IllegalArgumentException("Field " + field.getName()
+		if (databaseField.allowGeneratedIdInsert() && !databaseField.generatedId()) {
+			throw new IllegalArgumentException("Field " + fieldName
 					+ " must be a generated-id if allowGeneratedIdInsert = true");
 		}
-		if (fieldConfig.isForeignAutoRefresh() && !fieldConfig.isForeign()) {
-			throw new IllegalArgumentException("Field " + field.getName()
+		if (databaseField.foreignAutoRefresh() && !databaseField.foreign()) {
+			throw new IllegalArgumentException("Field " + fieldName
 					+ " must have foreign = true if foreignAutoRefresh = true");
 		}
-		if (fieldConfig.isForeignAutoCreate() && !fieldConfig.isForeign()) {
-			throw new IllegalArgumentException("Field " + field.getName()
+		if (databaseField.foreignAutoCreate() && !databaseField.foreign()) {
+			throw new IllegalArgumentException("Field " + fieldName
 					+ " must have foreign = true if foreignAutoCreate = true");
 		}
-		if (fieldConfig.getForeignColumnName() != null && !fieldConfig.isForeign()) {
-			throw new IllegalArgumentException("Field " + field.getName()
+		if (StringUtils.isNoneEmpty(databaseField.foreignColumnName()) && !databaseField.foreign()) {
+			throw new IllegalArgumentException("Field " + fieldName
 					+ " must have foreign = true if foreignColumnName is set");
 		}
-		if (fieldConfig.isVersion() && (dataPersister == null || !dataPersister.isValidForVersion())) {
+		//TODO: Check versions
+		/*if (databaseField.version() && (dataPersister == null || !dataPersister.isValidForVersion())) {
 			throw new IllegalArgumentException("Field " + field.getName()
 					+ " is not a valid type to be a version field");
 		}*/
