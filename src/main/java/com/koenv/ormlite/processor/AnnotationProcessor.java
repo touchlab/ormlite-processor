@@ -31,6 +31,7 @@ import com.j256.ormlite.field.FieldType;
 import com.j256.ormlite.table.DatabaseTable;
 import com.j256.ormlite.table.DatabaseTableConfig;
 import com.j256.ormlite.table.GeneratedTableMapper;
+import com.j256.ormlite.table.TableInfo;
 import com.squareup.javapoet.*;
 import org.apache.commons.lang3.StringUtils;
 
@@ -189,11 +190,11 @@ public class AnnotationProcessor extends AbstractProcessor
 
 		if (!generatedClasses.isEmpty())
 		{
-			JavaFile javaFile = generateMainFile();
+//			JavaFile javaFile = generateMainFile();
 			JavaFile helperJavaFile = generateHelperFile();
 			try
 			{
-				javaFile.writeTo(filer);
+//				javaFile.writeTo(filer);
 				helperJavaFile.writeTo(filer);
 			} catch (IOException e)
 			{
@@ -205,7 +206,7 @@ public class AnnotationProcessor extends AbstractProcessor
 		return false;
 	}
 
-	private JavaFile generateMainFile()
+	/*private JavaFile generateMainFile()
 	{
 		ClassName className = ClassName.get("com.koenv.ormlite.processor", "OrmLiteProcessor");
 
@@ -244,7 +245,7 @@ public class AnnotationProcessor extends AbstractProcessor
 		configBuilder.addMethod(methodBuilder.build());
 
 		return JavaFile.builder(className.packageName(), configBuilder.build()).build();
-	}
+	}*/
 
 	private JavaFile generateHelperFile()
 	{
@@ -263,14 +264,14 @@ public class AnnotationProcessor extends AbstractProcessor
 
 		findDbColumnMethod.addCode(
 				"\t\tif (Integer.class.equals(type)) {\n" +
-				"\t\t\treturn ((Number)arg).intValue();\n" +
-				"\t\t}else if(Long.class.equals(type)) {\n" +
-				"\t\t\treturn ((Number)arg).longValue();\n" +
-				"\t\t}else if(Short.class.equals(type)) {\n" +
-				"\t\t\treturn ((Number)arg).shortValue();\n" +
-				"\t\t}else{\n" +
-				"\t\t\treturn arg;\n" +
-				"\t\t}\n");
+						"\t\t\treturn ((Number)arg).intValue();\n" +
+						"\t\t}else if(Long.class.equals(type)) {\n" +
+						"\t\t\treturn ((Number)arg).longValue();\n" +
+						"\t\t}else if(Short.class.equals(type)) {\n" +
+						"\t\t\treturn ((Number)arg).shortValue();\n" +
+						"\t\t}else{\n" +
+						"\t\t\treturn arg;\n" +
+						"\t\t}\n");
 
 		configBuilder.addMethod(findDbColumnMethod.build());
 
@@ -317,10 +318,12 @@ public class AnnotationProcessor extends AbstractProcessor
 		extractVersion(fieldTypeGens, className, configBuilder);
 		extractVals(databaseTableHolders, fieldTypeGens, className, configBuilder, "extractVals", false);
 		extractVals(databaseTableHolders, fieldTypeGens, className, configBuilder, "extractCreateVals", true);
+		objectToString(fieldTypeGens, className, configBuilder);
+		objectsEqual(fieldTypeGens, className, configBuilder);
 
 		MethodSpec fieldConfigsMethod = fieldConfigs(databaseTableHolders, fieldTypeGens, tableName, className, configBuilder);
 
-		tableConfig(element, tableName, className, configBuilder, fieldConfigsMethod);
+		tableConfig(element, tableName, className, idType, configBuilder, fieldConfigsMethod);
 
 		baseClasses.add(className);
 		generatedClasses.add(configName);
@@ -328,11 +331,13 @@ public class AnnotationProcessor extends AbstractProcessor
 		return JavaFile.builder(configName.packageName(), configBuilder.build()).build();
 	}
 
-	private void tableConfig(TypeElement element, String tableName, ClassName className, TypeSpec.Builder configBuilder, MethodSpec fieldConfigsMethod)
+
+
+	private void tableConfig(TypeElement element, String tableName, ClassName className, ClassName idType, TypeSpec.Builder configBuilder, MethodSpec fieldConfigsMethod)
 	{
-		TypeName databaseTableConfig = ParameterizedTypeName.get(ClassName.get(DatabaseTableConfig.class), className);
+		TypeName databaseTableConfig = ParameterizedTypeName.get(ClassName.get(TableInfo.class), className, idType);
 		MethodSpec.Builder tableConfigMethodBuilder = MethodSpec.methodBuilder("getTableConfig")
-				.addModifiers(Modifier.PUBLIC, Modifier.STATIC)
+				.addModifiers(Modifier.PUBLIC)
 				.addException(SQLException.class)
 				.returns(databaseTableConfig)
 				.addStatement("$T config = new $T($T.class, $S, $N())",
@@ -524,6 +529,36 @@ public class AnnotationProcessor extends AbstractProcessor
 		return false;
 	}
 
+	//TODO
+	private void objectToString(List<FieldTypeGen> fieldTypeGens, ClassName className, TypeSpec.Builder configBuilder)
+	{
+		MethodSpec.Builder tableConfigMethodBuilder = MethodSpec.methodBuilder("objectToString")
+				.addModifiers(Modifier.PUBLIC)
+				.addException(SQLException.class)
+				.returns(String.class)
+				.addAnnotation(Override.class)
+				.addParameter(className, "data")
+				.addStatement("return \"heyo\"");
+
+		configBuilder.addMethod(tableConfigMethodBuilder.build());
+	}
+
+	//boolean objectsEqual(T d1, T d2)throws SQLException;
+//TODO
+	private void objectsEqual(List<FieldTypeGen> fieldTypeGens, ClassName className, TypeSpec.Builder configBuilder)
+	{
+		MethodSpec.Builder tableConfigMethodBuilder = MethodSpec.methodBuilder("objectsEqual")
+				.addModifiers(Modifier.PUBLIC)
+				.addException(SQLException.class)
+				.returns(boolean.class)
+				.addAnnotation(Override.class)
+				.addParameter(className, "d1")
+				.addParameter(className, "d2")
+				.addStatement("return false");
+
+		configBuilder.addMethod(tableConfigMethodBuilder.build());
+	}
+
 	private void extractVals(List<DatabaseTableHolder> databaseTableHolders, List<FieldTypeGen> fieldTypeGens, ClassName className, TypeSpec.Builder configBuilder, String methodName, boolean createVals)
 	{
 		MethodSpec.Builder returns = MethodSpec
@@ -674,7 +709,7 @@ public class AnnotationProcessor extends AbstractProcessor
 					ClassName configName = ClassName.get(className.packageName(), Joiner.on('$').join(className.simpleNames()) + "$$Configuration");
 
 					CodeBlock.Builder foreignBuilder = CodeBlock.builder();
-					foreignBuilder.add("if(!results.wasNull(" + count + ")){");
+					foreignBuilder.add("if(!results.isNull(" + count + ")){");
 					foreignBuilder.addStatement("$T __$N = $T.instance.createObject()", className, config.fieldName, configName);
 					foreignBuilder.addStatement("$T.instance.assignId(__$N, $N)", configName, config.fieldName, accessData);
 
@@ -697,7 +732,7 @@ public class AnnotationProcessor extends AbstractProcessor
 				else
 				{
 					if(checkNull)
-						sb.append("if(!results.wasNull("+ count+"))");
+						sb.append("if(!results.isNull("+ count+"))");
 
 					if (config.useGetSet)
 					{
