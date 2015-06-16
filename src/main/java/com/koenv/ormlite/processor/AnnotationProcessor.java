@@ -24,13 +24,10 @@
 package com.koenv.ormlite.processor;
 
 import com.google.common.base.Joiner;
-import com.j256.ormlite.dao.DaoManager;
-import com.j256.ormlite.db.DatabaseType;
-import com.j256.ormlite.db.SqliteAndroidDatabaseType;
+import android.database.Cursor;
 import com.j256.ormlite.field.DataType;
 import com.j256.ormlite.field.DatabaseField;
 import com.j256.ormlite.field.FieldType;
-import com.j256.ormlite.support.DatabaseResults;
 import com.j256.ormlite.table.DatabaseTable;
 import com.j256.ormlite.table.DatabaseTableConfig;
 import com.j256.ormlite.table.GeneratedTableMapper;
@@ -60,8 +57,6 @@ public class AnnotationProcessor extends AbstractProcessor
 	private Types typeUtils;
 	private Filer filer;
 	private Messager messager;
-
-	private static final DatabaseType databaseType = new SqliteAndroidDatabaseType();
 
 	private List<ClassName> baseClasses;
 	private List<ClassName> generatedClasses;
@@ -142,7 +137,7 @@ public class AnnotationProcessor extends AbstractProcessor
 							{
 								continue;
 							}
-							FieldTypeGen fieldTypeGen = new FieldTypeGen(databaseType, annotatedElement, element, typeUtils, messager);
+							FieldTypeGen fieldTypeGen = new FieldTypeGen(annotatedElement, element, typeUtils, messager);
 
 							if (fieldTypeGen != null)
 							{
@@ -245,8 +240,6 @@ public class AnnotationProcessor extends AbstractProcessor
 			ClassName generatedClass = generatedClasses.get(i);
 			methodBuilder.addStatement("generatedMap.put($T.class, new $T())", baseClass, generatedClass);
 		}
-		methodBuilder.addStatement("$T.setGeneratedMap(generatedMap)", DaoManager.class);
-		methodBuilder.addStatement("$T.addCachedDatabaseConfigs(configs)", DaoManager.class);
 
 		configBuilder.addMethod(methodBuilder.build());
 
@@ -400,7 +393,7 @@ public class AnnotationProcessor extends AbstractProcessor
 		MethodSpec.Builder javaFillMethodBuilder = MethodSpec.methodBuilder("fillRow")
 				.addModifiers(Modifier.PUBLIC)
 				.addParameter(className, "data")
-				.addParameter(DatabaseResults.class, "results")
+				.addParameter(Cursor.class, "results")
 				.addException(SQLException.class)
 				.addAnnotation(Override.class);
 
@@ -756,7 +749,6 @@ public class AnnotationProcessor extends AbstractProcessor
 		CodeBlock.Builder builder = CodeBlock.builder()
 
 				.addStatement("config = new $T( " +
-								"new $T()," + //DatabaseType
 								"$S," +
 								"$S," +
 								"$S," +
@@ -779,7 +771,6 @@ public class AnnotationProcessor extends AbstractProcessor
 								"$L" +
 								")",
 						FieldType.class,
-						SqliteAndroidDatabaseType.class,
 						tableName,
 						config.fieldName,
 						config.columnName,

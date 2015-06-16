@@ -1,12 +1,9 @@
 package com.koenv.ormlite.processor;
 
-import com.j256.ormlite.dao.BaseDaoImpl;
-import com.j256.ormlite.db.DatabaseType;
 import com.j256.ormlite.field.DataPersister;
 import com.j256.ormlite.field.DataType;
 import com.j256.ormlite.field.DatabaseField;
 import com.j256.ormlite.field.FieldConverter;
-import com.j256.ormlite.stmt.mapped.MappedQueryForId;
 import com.j256.ormlite.table.DatabaseTable;
 import com.j256.ormlite.table.TableInfo;
 import org.apache.commons.lang3.StringUtils;
@@ -60,11 +57,11 @@ public class FieldTypeGen
 	private FieldTypeGen foreignIdField;
 	private TableInfo<?, ?> foreignTableInfo;
 	private FieldTypeGen foreignFieldType;
-	private BaseDaoImpl<?, ?> foreignDao;
-	private MappedQueryForId<Object, Object> mappedQueryForId;
+//	private BaseDaoImpl<?, ?> foreignDao;
+//	private MappedQueryForId<Object, Object> mappedQueryForId;
 
 
-	public FieldTypeGen(DatabaseType databaseType, Element databaseElement, Element fieldElement, Types typeUtils, Messager messager)
+	public FieldTypeGen(Element databaseElement, Element fieldElement, Types typeUtils, Messager messager)
 	{
 		databaseField = fieldElement.getAnnotation(DatabaseField.class);
 
