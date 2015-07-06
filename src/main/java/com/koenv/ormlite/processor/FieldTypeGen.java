@@ -40,6 +40,7 @@ public class FieldTypeGen
 	public final boolean isGeneratedId;
 	public final boolean foreign;
 	public final boolean useGetSet;
+	public final Element fieldElement;
 	public final DatabaseField databaseField;
 	public final String dataTypeClassname;
 
@@ -50,6 +51,7 @@ public class FieldTypeGen
 	public DataType dataType;
 	public String persisterClass;
 	public Object defaultValue;
+
 //	private Object dataTypeConfigObj;
 
 	private FieldConverter fieldConverter;
@@ -63,6 +65,7 @@ public class FieldTypeGen
 
 	public FieldTypeGen(Element databaseElement, Element fieldElement, Types typeUtils, Messager messager)
 	{
+		this.fieldElement = fieldElement;
 		databaseField = fieldElement.getAnnotation(DatabaseField.class);
 
 		this.databaseElement = databaseElement;
