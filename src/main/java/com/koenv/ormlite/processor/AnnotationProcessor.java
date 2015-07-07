@@ -23,6 +23,7 @@
  */
 package com.koenv.ormlite.processor;
 
+import android.database.sqlite.SQLiteStatement;
 import com.google.common.base.Joiner;
 import android.database.Cursor;
 import com.j256.ormlite.field.DataType;
@@ -206,47 +207,6 @@ public class AnnotationProcessor extends AbstractProcessor
 		return false;
 	}
 
-	/*private JavaFile generateMainFile()
-	{
-		ClassName className = ClassName.get("com.koenv.ormlite.processor", "OrmLiteProcessor");
-
-		TypeSpec.Builder configBuilder = TypeSpec.classBuilder(className.simpleName())
-				.addModifiers(Modifier.PUBLIC, Modifier.FINAL)
-				.addJavadoc("Generated on $L\n", new SimpleDateFormat("yyyy/MM/dd hh:mm:ss").format(new Date()));
-
-		ParameterizedTypeName databaseTableConfig = ParameterizedTypeName.get(ClassName.get(DatabaseTableConfig.class), WildcardTypeName.subtypeOf(Object.class));
-
-		ParameterizedTypeName collectionOfTableConfigs = ParameterizedTypeName.get(ClassName.get(Collection.class), databaseTableConfig);
-		ParameterizedTypeName listOfTableConfigs = ParameterizedTypeName.get(ClassName.get(ArrayList.class), databaseTableConfig);
-
-		MethodSpec.Builder methodBuilder = MethodSpec.methodBuilder("init")
-				.addModifiers(Modifier.PUBLIC, Modifier.STATIC)
-				.returns(TypeName.VOID)
-				.addException(SQLException.class)
-				.addJavadoc("Call this method when initializing your application\n")
-				.addStatement("$T configs = new $T()", collectionOfTableConfigs, listOfTableConfigs);
-
-		for (ClassName tableConfig : generatedClasses)
-		{
-			methodBuilder.addStatement("configs.add($T.getTableConfig())", tableConfig);
-		}
-
-		ParameterizedTypeName generatedMapType = ParameterizedTypeName.get(ClassName.get(HashMap.class),
-				ParameterizedTypeName.get(ClassName.get(Class.class), WildcardTypeName.subtypeOf(Object.class)),
-				ParameterizedTypeName.get(ClassName.get(GeneratedTableMapper.class), WildcardTypeName.subtypeOf(Object.class), WildcardTypeName.subtypeOf(Object.class)));
-		methodBuilder.addStatement("$T generatedMap = new $T()", generatedMapType, generatedMapType);
-		for (int i = 0; i < baseClasses.size(); i++)
-		{
-			ClassName baseClass = baseClasses.get(i);
-			ClassName generatedClass = generatedClasses.get(i);
-			methodBuilder.addStatement("generatedMap.put($T.class, new $T())", baseClass, generatedClass);
-		}
-
-		configBuilder.addMethod(methodBuilder.build());
-
-		return JavaFile.builder(className.packageName(), configBuilder.build()).build();
-	}*/
-
 	private JavaFile generateHelperFile()
 	{
 		ClassName className = ClassName.get("com.koenv.ormlite.processor", "OrmLiteHelper");
@@ -276,11 +236,6 @@ public class AnnotationProcessor extends AbstractProcessor
 		configBuilder.addMethod(findDbColumnMethod.build());
 
 		return JavaFile.builder(className.packageName(), configBuilder.build()).build();
-	}
-
-	private ParameterizedTypeName createColPositionsType()
-	{
-		return ParameterizedTypeName.get(Map.class, String.class, Integer.class);
 	}
 
 	private JavaFile generateClassConfigFile(List<DatabaseTableHolder> databaseTableHolders, TypeElement element, List<FieldTypeGen> fieldTypeGens, String tableName)
@@ -316,8 +271,8 @@ public class AnnotationProcessor extends AbstractProcessor
 		assignId(fieldTypeGens, className, configBuilder);
 		extractId(fieldTypeGens, className, configBuilder);
 		extractVersion(fieldTypeGens, className, configBuilder);
-		extractVals(databaseTableHolders, fieldTypeGens, className, configBuilder, "extractVals", false);
-		extractVals(databaseTableHolders, fieldTypeGens, className, configBuilder, "extractCreateVals", true);
+		buildExtractStatements(databaseTableHolders, fieldTypeGens, className, configBuilder, "bindVals", false);
+		buildExtractStatements(databaseTableHolders, fieldTypeGens, className, configBuilder, "bindCreateVals", true);
 		objectToString(fieldTypeGens, className, configBuilder);
 		objectsEqual(fieldTypeGens, className, configBuilder);
 
@@ -330,8 +285,6 @@ public class AnnotationProcessor extends AbstractProcessor
 
 		return JavaFile.builder(configName.packageName(), configBuilder.build()).build();
 	}
-
-
 
 	private void tableConfig(TypeElement element, String tableName, ClassName className, ClassName idType, TypeSpec.Builder configBuilder, MethodSpec fieldConfigsMethod)
 	{
@@ -460,10 +413,7 @@ public class AnnotationProcessor extends AbstractProcessor
 				.addParameter(className, "data")
 				.returns(ClassName.bestGuess(idField.dataTypeClassname));
 
-		if (idField.useGetSet)
-			methodBody.addStatement("return data.get"+ StringUtils.capitalize(idField.fieldName) +"()");
-		else
-			methodBody.addStatement("return data."+ idField.fieldName);
+		methodBody.addStatement("return data == null ? null : "+ simpleExtractor(idField));
 
 		configBuilder.addMethod(methodBody
 						.build()
@@ -518,6 +468,22 @@ public class AnnotationProcessor extends AbstractProcessor
 			DataType.STRING
 	};
 
+	private static String simpleExtractor(FieldTypeGen fieldTypeGen)
+	{
+		StringBuilder convertBuilder = new StringBuilder();
+		if (fieldTypeGen.useGetSet)
+		{
+			String accessPrefix = fieldTypeGen.dataType == DataType.BOOLEAN ? "is" : "get";
+			convertBuilder.append("data.").append(accessPrefix).append(StringUtils.capitalize(fieldTypeGen.fieldName)).append("(").append(")");
+		}
+		else
+		{
+			convertBuilder.append("data.").append(fieldTypeGen.fieldName);
+		}
+
+		return convertBuilder.toString();
+	}
+
 	private static boolean isStaticType(DataType dataType)
 	{
 		for (DataType staticType : STATIC_TYPES)
@@ -559,6 +525,155 @@ public class AnnotationProcessor extends AbstractProcessor
 		configBuilder.addMethod(tableConfigMethodBuilder.build());
 	}
 
+	private void buildExtractStatements(List<DatabaseTableHolder> databaseTableHolders, List<FieldTypeGen> fieldTypeGens, ClassName className, TypeSpec.Builder configBuilder, String methodName, boolean createVals)
+	{
+		MethodSpec.Builder returns = MethodSpec
+				.methodBuilder(methodName)
+				.addModifiers(Modifier.PUBLIC)
+				.addException(SQLException.class)
+				.addAnnotation(Override.class)
+				.addParameter(SQLiteStatement.class, "stmt")
+				.addParameter(className, "data")
+				;
+
+		int assignCount = 0;
+		int configCount = 0;
+		for (FieldTypeGen fieldTypeGen : fieldTypeGens)
+		{
+			if((createVals && !fieldTypeGen.isGeneratedId) || (!createVals && !fieldTypeGen.isGeneratedId && !fieldTypeGen.isId))
+			{
+				buildExtractStatement(databaseTableHolders, fieldTypeGen, returns, configCount, assignCount);
+				assignCount++;
+			}
+
+			configCount++;
+		}
+
+		if(!createVals)
+		{
+			CodeBlock.Builder whereBlock = CodeBlock.builder();
+			for (FieldTypeGen fieldTypeGen : fieldTypeGens)
+			{
+				if (fieldTypeGen.isGeneratedId || fieldTypeGen.isId)
+				{
+					String idTypeSuffix;
+					if (fieldTypeGen.dataTypeClassname.contains("String"))
+					{
+						idTypeSuffix = "String";
+					} else
+					{
+						idTypeSuffix = "Long";
+					}
+					whereBlock.addStatement("stmt.bind" + idTypeSuffix + "($L, " + simpleExtractor(fieldTypeGen) + ")", assignCount + 1);
+				}
+			}
+
+			returns.addCode(whereBlock.build());
+		}
+
+		configBuilder.addMethod(returns.build());
+	}
+	private void buildExtractStatement(List<DatabaseTableHolder> databaseTableHolders, FieldTypeGen fieldTypeGen, MethodSpec.Builder methodBuilder, int configCount, int assignCount)
+	{
+		CodeBlock.Builder assignBlock = CodeBlock.builder();
+
+		if(fieldTypeGen.foreign)
+		{
+			ConfigureClassDefinitions configureClassDefinitions = new ConfigureClassDefinitions(databaseTableHolders, (TypeElement) fieldTypeGen.databaseElement).invoke();
+			boolean stringId = configureClassDefinitions.idType.simpleName().contains("String");
+
+			String idTypeSuffix;
+			if(stringId)
+			{
+				idTypeSuffix = "String";
+			}
+			else
+			{
+				idTypeSuffix = "Long";
+			}
+			assignBlock.addStatement("$T val$L = " + simpleExtractor(fieldTypeGen), configureClassDefinitions.className, assignCount + 1);
+			assignBlock.add("if(val$L == null){\n", assignCount + 1);
+			assignBlock.addStatement("stmt.bindNull($L)", assignCount + 1);
+			assignBlock.add("}else{\n");
+			assignBlock.addStatement("stmt.bind" + idTypeSuffix + "($L, $T.instance.extractId(val$L))", assignCount + 1, configureClassDefinitions.configName, assignCount + 1);
+			assignBlock.add("}\n");
+
+//			assignBlock.addStatement("stmt.bind"+ idTypeSuffix +"($L, $T.instance.extractId(" + simpleExtractor(fieldTypeGen) + "))", assignCount+1, configureClassDefinitions.configName);
+		}
+		else
+		{
+			boolean softConvert = !isStaticType(fieldTypeGen.dataType);
+			if (softConvert)
+			{
+				assignBlock.addStatement("Object val$L = " + simpleExtractor(fieldTypeGen), assignCount+1);
+				assignBlock.add("if(val$L == null){\n", assignCount+1);
+				assignBlock.addStatement("stmt.bindNull($L)", assignCount+1);
+				assignBlock.add("}else{\n");
+				assignBlock.addStatement("stmt.bindString($L, fieldConfigs[$L].getDataPersister().javaToSqlArg(fieldConfigs[$L], val$L).toString())", assignCount+1, configCount, configCount, assignCount+1);
+				assignBlock.add("}\n");
+
+			}
+			else
+			{
+				String type;
+				switch (fieldTypeGen.dataType)
+				{
+					case BOOLEAN:
+						assignBlock.addStatement("stmt.bindLong($L, "+ simpleExtractor(fieldTypeGen) +"?1:0)", assignCount+1);
+						break;
+					case BOOLEAN_OBJ:
+						assignBlock.addStatement("Boolean val$L = " + simpleExtractor(fieldTypeGen), assignCount+1);
+						assignBlock.add("if(val$L == null){\n", assignCount+1);
+						assignBlock.addStatement("stmt.bindNull($L)", assignCount+1);
+						assignBlock.add("}else{\n");
+						assignBlock.addStatement("stmt.bindLong($L, val$L ? 1 : 0)", assignCount+1, assignCount+1);
+						assignBlock.add("}\n");
+						break;
+					case FLOAT:
+					case DOUBLE:
+						assignBlock.addStatement("stmt.bindDouble($L, "+ simpleExtractor(fieldTypeGen) +")", assignCount+1);
+						break;
+					case FLOAT_OBJ:
+						type = "Float";
+					case DOUBLE_OBJ:
+						type = "Double";
+						assignBlock.addStatement("$L val$L = " + simpleExtractor(fieldTypeGen), type, assignCount+1);
+						assignBlock.add("if(val$L == null){\n", assignCount);
+						assignBlock.addStatement("stmt.bindNull($L)", assignCount);
+						assignBlock.add("}else{\n");
+						assignBlock.addStatement("stmt.bindDouble($L, val$L.doubleValue())", assignCount+1, assignCount+1);
+						assignBlock.add("}\n");
+						break;
+					case SHORT:
+					case INTEGER:
+					case LONG:
+						assignBlock.addStatement("stmt.bindLong($L, "+ simpleExtractor(fieldTypeGen) +")", assignCount+1);
+						break;
+					case SHORT_OBJ:
+						type = "Short";
+					case INTEGER_OBJ:
+						type = "Integer";
+					case LONG_OBJ:
+						type = "Long";
+						assignBlock.addStatement("$L val$L = " + simpleExtractor(fieldTypeGen), type, assignCount+1);
+						assignBlock.add("if(val$L == null){\n", assignCount+1);
+						assignBlock.addStatement("stmt.bindNull($L)", assignCount+1);
+						assignBlock.add("}else{\n");
+						assignBlock.addStatement("stmt.bindLong($L, val$L.longValue())", assignCount+1, assignCount+1);
+						assignBlock.add("}\n");
+						break;
+					case STRING:
+						assignBlock.addStatement("stmt.bindString($L, "+ simpleExtractor(fieldTypeGen) +")", assignCount+1);
+						break;
+					default:
+						throw new IllegalArgumentException("Need to figure out fialure");
+				}
+			}
+		}
+
+		methodBuilder.addCode(assignBlock.build());
+	}
+
 	private void extractVals(List<DatabaseTableHolder> databaseTableHolders, List<FieldTypeGen> fieldTypeGens, ClassName className, TypeSpec.Builder configBuilder, String methodName, boolean createVals)
 	{
 		MethodSpec.Builder returns = MethodSpec
@@ -595,13 +710,7 @@ public class AnnotationProcessor extends AbstractProcessor
 				{
 					StringBuilder sb = new StringBuilder();
 
-					if (fieldTypeGen.useGetSet)
-					{
-						sb.append("fields[").append(assignCount).append("] = data.get").append(StringUtils.capitalize(fieldTypeGen.fieldName)).append("(").append(")");
-					} else
-					{
-						sb.append("fields[").append(assignCount).append("] = data.").append(fieldTypeGen.fieldName).append("");
-					}
+					sb.append("fields[").append(assignCount).append("] = ").append(simpleExtractor(fieldTypeGen));
 
 					StringBuilder convertBuilder = null;
 					if (!isStaticType(fieldTypeGen.dataType))
